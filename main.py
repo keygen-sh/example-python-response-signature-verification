@@ -1,86 +1,71 @@
-import machineid
+from ed25519 import BadSignatureError
+from urllib.parse import quote
+from hashlib import sha256
 import requests
+import ed25519
+import base64
 import json
 import sys
 import os
-
-def activate_license(license_key):
-  machine_fingerprint = machineid.hashed_id('example-app')
-  validation = requests.post(
-    "https://api.keygen.sh/v1/accounts/{}/licenses/actions/validate-key".format(os.environ['KEYGEN_ACCOUNT_ID']),
-    headers={
-      "Content-Type": "application/vnd.api+json",
-      "Accept": "application/vnd.api+json"
-    },
-    data=json.dumps({
-      "meta": {
-        "scope": { "fingerprint": machine_fingerprint },
-        "key": license_key
-      }
-    })
-  ).json()
-
-  if "errors" in validation:
-    errs = validation["errors"]
-
-    return False, "license validation failed: {}".format(
-      ','.join(map(lambda e: "{} - {}".format(e["title"], e["detail"]).lower(), errs))
-    )
-
-  # If the license is valid for the current machine, that means it has
-  # already been activated. We can return early.
-  if validation["meta"]["valid"]:
-    return True, "license has already been activated on this machine"
-
-  # Otherwise, we need to determine why the current license is not valid,
-  # because in our case it may be invalid because another machine has
-  # already been activated, or it may be invalid because it doesn't
-  # have any activated machines associated with it yet and in that case
-  # we'll need to activate one.
-  validation_code = validation["meta"]["code"]
-  activation_is_required = validation_code == 'FINGERPRINT_SCOPE_MISMATCH' or \
-                           validation_code == 'NO_MACHINES' or \
-                           validation_code == 'NO_MACHINE'
-
-  if not activation_is_required:
-    return False, "license {}".format(validation["meta"]["detail"])
-
-  # If we've gotten this far, then our license has not been activated yet,
-  # so we should go ahead and activate the current machine.
-  activation = requests.post(
-    "https://api.keygen.sh/v1/accounts/{}/machines".format(os.environ['KEYGEN_ACCOUNT_ID']),
-    headers={
-      "Authorization": "License {}".format(license_key),
-      "Content-Type": "application/vnd.api+json",
-      "Accept": "application/vnd.api+json"
-    },
-    data=json.dumps({
-      "data": {
-        "type": "machines",
-        "attributes": {
-          "fingerprint": machine_fingerprint
-        },
-        "relationships": {
-          "license": {
-            "data": { "type": "licenses", "id": validation["data"]["id"] }
-          }
-        }
-      }
-    })
-  ).json()
-
-  # If we get back an error, our activation failed.
-  if "errors" in activation:
-    errs = activation["errors"]
-
-    return False, "license activation failed: {}".format(
-      ','.join(map(lambda e: "{} - {}".format(e["title"], e["detail"]).lower(), errs))
-    )
-
-  return True, "license activated"
+import re
 
 # Run from the command line:
-#   python main.py some_license_key
-status, msg = activate_license(sys.argv[1])
+#   python main.py /licenses/foo
+path = sys.argv[1]
 
-print(status, msg)
+uri = '/v1/accounts/{}/{}'.format(os.environ['KEYGEN_ACCOUNT_ID'], path.strip('/'))
+url = 'https://api.keygen.sh' + uri
+
+res = requests.get(url,
+  headers={
+    'Authorization': 'Bearer {}'.format(os.environ['KEYGEN_PRODUCT_TOKEN']),
+    'Accept': 'application/vnd.api+json',
+  },
+)
+
+try:
+  signature = res.headers.get('Keygen-Signature')
+  assert signature != None, 'signature is missing'
+
+  # Parse signature header
+  values = [v.split('=', 1) for v in re.split(r"\s*,\s*", signature)]
+  values = [(k, v.strip('"')) for (k, v) in values]
+  params = dict(values)
+  assert params['algorithm'] == 'ed25519', 'algorithm is unsupported'
+
+  # Verify digest header
+  value = base64.b64encode(sha256(res.text.encode()).digest())
+  digest = 'sha-256={}'.format(value.decode())
+  assert digest == res.headers.get('Digest'), 'digest did not match'
+
+  # Build signing data
+  date = res.headers.get('Date')
+  signing_data = ''.join([
+    '(request-target): {method} {uri}\n'.format(method='get', uri=quote(uri, safe='/?=&')),
+    'host: api.keygen.sh\n',
+    'date: {}\n'.format(date),
+    'digest: {}'.format(digest),
+  ])
+
+  # Verify response signature
+  verify_key = ed25519.VerifyingKey(
+    os.environ['KEYGEN_PUBLIC_KEY'].encode(),
+    encoding='hex',
+  )
+
+  verify_key.verify(
+    base64.b64decode(params['signature']),
+    signing_data.encode(),
+  )
+
+  # Print verified response
+  print(
+    json.dumps(res.json(), indent=2),
+  )
+except Exception as e:
+  print(
+    'signature verification failed: {}'.format(e),
+  )
+
+  if 'DEBUG' in os.environ:
+    print(res.text)

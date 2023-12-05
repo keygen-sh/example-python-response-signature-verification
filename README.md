@@ -1,15 +1,27 @@
-# Example Machine Activation
+# Example Python Response Signature Verification
 
-This is an example of a typical machine activation flow written in Python.
-You may of course choose to implement a different flow if required - this
-only serves as an example implementation.
+This is an example of [verifying response signatures](https://keygen.sh/docs/api/signatures/#response-signatures)
+in Python using your Keygen account's unique Ed25519 public key. You can find your public
+key within [your account's settings page](https://app.keygen.sh/settings).
+
+Verifying response signatures will help prevent man-in-the-middle and replay
+attacks, where the attacker redirects traffic from your licensing server
+(e.g. Keygen) to their own locally controlled server. Other examples are
+when you have cached an API response locally and want to verify its integrity
+(i.e. it has not been tampered with).
 
 ## Running the example
 
 First up, configure a few environment variables:
 
 ```bash
-# Your Keygen account ID. Find yours at https://app.keygen.sh/settings.
+# Your Keygen account's Ed25519 hex-encoded verify key
+export KEYGEN_PUBLIC_KEY="YOUR_KEYGEN_ED25519_VERIFY_KEY"
+
+# Your Keygen product token (don't share this!)
+export KEYGEN_PRODUCT_TOKEN="YOUR_KEYGEN_PRODUCT_TOKEN"
+
+# Your Keygen account ID
 export KEYGEN_ACCOUNT_ID="YOUR_KEYGEN_ACCOUNT_ID"
 ```
 
@@ -23,16 +35,17 @@ Next, install dependencies with [`pip`](https://packaging.python.org/):
 python3 -m pip install -r requirements.txt
 ```
 
-## Activating a machine
-
-To perform a machine activation, run the script and supply a license key:
+Then run the script with the route you want to fetch:
 
 ```
-python3 main.py some-license-key-here
+python3 main.py '/licenses/442160c6-20d2-44a7-883d-245e38f651fd'
+python3 main.py '/users/dbe63060-eee7-4c87-98fa-f133fb8131fa'
+python3 main.py '/machines?page[number]=1&page[size]=5'
 ```
 
-The script will use a SHA256-HMAC of your device's [machineid](https://github.com/keygen-sh/py-machineid)
-for the machine's fingerprint.
+The above commands will only succeed if the signature verification is
+successful, so be sure to copy your public key correctly. You can find
+your public key within [your account's settings page](https://app.keygen.sh/settings).
 
 ## Questions?
 
